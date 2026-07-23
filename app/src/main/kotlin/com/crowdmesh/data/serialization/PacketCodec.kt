@@ -2,6 +2,8 @@ package com.crowdmesh.data.serialization
 
 import com.crowdmesh.mesh.protocol.PacketType
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.encodeToByteArray
 import kotlinx.serialization.protobuf.ProtoBuf
 
 /**

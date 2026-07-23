@@ -22,7 +22,7 @@ class MessageStore @Inject constructor(
 ) {
     private val mutex = Mutex()
     private val recentlySeen = object : LinkedHashMap<String, Boolean>(INITIAL_CAPACITY, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.Entry<String, Boolean>?): Boolean =
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>): Boolean =
             size > MAX_IN_MEMORY_ENTRIES
     }
 
