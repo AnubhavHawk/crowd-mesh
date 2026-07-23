@@ -88,7 +88,12 @@ private fun MapLibreHeatmapView(
     var loadedStyle by remember { mutableStateOf<Style?>(null) }
     val latestCells = rememberUpdatedState(heatmapCells)
 
-    LaunchedEffect(Unit) { MapLibre.getInstance(context) }
+    // MapLibre.getInstance() is also called eagerly in CrowdMeshApp.onCreate(), which
+    // is the actual guarantee; this call is just a same-thread, idempotent safety net
+    // that runs synchronously *before* the MapView below is constructed (a LaunchedEffect
+    // here would not be soon enough — its coroutine can run after this composable body,
+    // by which point MapView(context) would already have thrown).
+    MapLibre.getInstance(context)
 
     val mapView = remember {
         MapView(context).apply {

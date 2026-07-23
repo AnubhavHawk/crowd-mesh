@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.crowdmesh.work.MeshWorkScheduler
 import dagger.hilt.android.HiltAndroidApp
+import org.maplibre.android.MapLibre
 import javax.inject.Inject
 
 /**
@@ -29,6 +30,11 @@ class CrowdMeshApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // MapLibre.getInstance() must run before any MapView is constructed anywhere
+        // in the app (its constructor reads this singleton) — doing it here at
+        // process start guarantees that ordering instead of racing it against
+        // Compose's LaunchedEffect scheduling in MapScreen.
+        MapLibre.getInstance(applicationContext)
         meshWorkScheduler.scheduleAll()
     }
 }
