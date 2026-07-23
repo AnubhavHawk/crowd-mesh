@@ -1,0 +1,17 @@
+{
+  "version": 8,
+  "name": "CrowdMesh Offline Fallback",
+  "metadata": {
+    "crowdmesh:note": "Minimal no-network MapLibre style. It has NO remote tile source (the app is offline-only), just a flat background plus the locally-computed heatmap layer that MeshHeatmapLayerBuilder injects at runtime. Replace this with a real vector/raster style backed by a bundled .mbtiles region extract for an actual basemap — see app/src/main/assets/map/README.md."
+  },
+  "sources": {},
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#eef1f3"
+      }
+    }
+  ]
+}

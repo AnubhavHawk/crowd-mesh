@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme; actual theming/colors are driven by Compose Material3
+         (see presentation/common/Theme.kt). This XML theme only controls the window
+         background shown before Compose takes over. -->
+    <style name="Theme.CrowdMesh" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/ic_launcher_background</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>

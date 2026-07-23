@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- allowBackup is false (see AndroidManifest.xml) since the on-device UUID and
+     presence DB are per-device identity data that should never be restored onto
+     a different physical device. This file is kept only to satisfy the
+     android:fullBackupContent attribute reference. -->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+</full-backup-content>

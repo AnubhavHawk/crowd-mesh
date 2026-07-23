@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#101820</color>
+    <color name="heatmap_green">#43A047</color>
+    <color name="heatmap_yellow">#FDD835</color>
+    <color name="heatmap_orange">#FB8C00</color>
+    <color name="heatmap_red">#E53935</color>
+</resources>

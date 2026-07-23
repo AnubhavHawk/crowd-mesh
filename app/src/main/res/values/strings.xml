@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CrowdMesh</string>
+
+    <string name="home_title">CrowdMesh</string>
+    <string name="home_update_button">Update My Presence</string>
+    <string name="home_updating">Updating…</string>
+    <string name="home_last_updated">Last updated %1$s</string>
+    <string name="home_never_updated">You haven\'t shared your presence yet</string>
+    <string name="home_mesh_peers">%1$d nearby peers</string>
+    <string name="home_mesh_records">%1$d presence records known</string>
+    <string name="home_view_map">View Crowd Map</string>
+    <string name="home_error_location">Couldn\'t get a GPS fix. Move somewhere with a clearer sky view and try again.</string>
+    <string name="home_error_permissions">CrowdMesh needs location and nearby-devices permissions to work.</string>
+
+    <string name="permissions_title">Permissions needed</string>
+    <string name="permissions_rationale">CrowdMesh works entirely offline by exchanging presence data with nearby phones over Bluetooth and Wi‑Fi. It needs:</string>
+    <string name="permissions_location">Location — to read your GPS fix and place you on the map</string>
+    <string name="permissions_bluetooth">Nearby devices (Bluetooth) — to discover and sync with peers</string>
+    <string name="permissions_wifi">Nearby devices (Wi‑Fi) — used opportunistically as a faster transport</string>
+    <string name="permissions_grant">Grant Permissions</string>
+    <string name="permissions_denied">Some permissions were denied. CrowdMesh can\'t discover peers without them.</string>
+
+    <string name="map_title">Crowd Map</string>
+    <string name="map_legend_low">Low</string>
+    <string name="map_legend_high">High</string>
+
+    <string name="mesh_status_idle">Idle</string>
+    <string name="mesh_status_scanning">Scanning</string>
+    <string name="mesh_status_syncing">Syncing with %1$d peer(s)</string>
+</resources>
