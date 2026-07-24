@@ -31,7 +31,7 @@ class MeshWorkScheduler @Inject constructor(
             .build()
 
         // 15 minutes is the minimum period WorkManager allows for periodic work.
-        val request = PeriodicWorkRequestBuilder<PeriodicMeshSyncWorker>(15, TimeUnit.MINUTES)
+        val request = PeriodicWorkRequestBuilder<PeriodicMeshSyncWorker>(3, TimeUnit.MINUTES)
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.LINEAR, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .build()

@@ -5,6 +5,7 @@ import com.crowdmesh.domain.GossipPolicy
 import com.crowdmesh.domain.model.PresenceRecord
 import com.crowdmesh.domain.repository.IdentityProvider
 import com.crowdmesh.domain.repository.PresenceRepository
+import com.crowdmesh.util.Logger
 import com.crowdmesh.util.TimeProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -28,7 +29,20 @@ class PresenceRepositoryImpl @Inject constructor(
         combine(dao.observeAll(), tickerFlow(LIVE_DECAY_TICK_MILLIS)) { entities, _ -> entities }
             .map { entities ->
                 val now = timeProvider.nowMillis()
-                entities.filter { it.ttlExpiresAt > now }.map { it.toDomain() }
+                val (live, expired) = entities.partition { it.ttlExpiresAt > now }
+                Logger.d(
+                    TAG,
+                    "[DB] observeAllRecords emitting ${live.size} live record(s) (${entities.size} total in table, " +
+                        "${expired.size} expired and filtered out: ${expired.map { it.userId }})",
+                )
+                live.forEach {
+                    Logger.d(
+                        TAG,
+                        "[DB] record userId=${it.userId} geohash=${it.geohash} timestamp=${it.timestamp} " +
+                            "ttlExpiresAt=${it.ttlExpiresAt} version=${it.version}",
+                    )
+                }
+                live.map { it.toDomain() }
             }
 
     override fun observeOwnRecord(): Flow<PresenceRecord?> =
@@ -59,6 +73,9 @@ class PresenceRepositoryImpl @Inject constructor(
 
         if (isNewer) {
             dao.upsert(record.toEntity(ttlExpiresAtMillis))
+            Logger.d(TAG, "[DB] mergeRemoteRecord upserted ${record.userId} v${record.version} (existing was ${existing?.version})")
+        } else {
+            Logger.d(TAG, "[DB] mergeRemoteRecord rejected ${record.userId} v${record.version} as stale (existing=${existing?.version})")
         }
         return isNewer
     }
@@ -76,6 +93,8 @@ class PresenceRepositoryImpl @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "PresenceRepository"
+
         // Room's Flow re-emits on table writes only; this tick makes TTL-based
         // decay (heatmap fading, expired-cell drop) visible even when nothing
         // else is being written to the table.

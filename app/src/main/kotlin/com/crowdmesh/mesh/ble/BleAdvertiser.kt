@@ -9,7 +9,6 @@ import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.crowdmesh.util.Logger
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -17,9 +16,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Advertises a tiny, connectable BLE beacon: our service UUID plus a short
- * (few-byte) identity payload, nothing more. Real data only moves once a
- * peer decides to open a GATT connection based on this beacon.
+ * Advertises a tiny, connectable BLE beacon: a manufacturer-ID-tagged short
+ * identity payload, nothing more (the GATT service UUID itself is not part
+ * of the advertisement — see the size-budget note in [start]). Real data
+ * only moves once a peer decides to open a GATT connection based on this beacon.
  */
 @Singleton
 class BleAdvertiser @Inject constructor(
@@ -51,6 +51,15 @@ class BleAdvertiser @Inject constructor(
             Logger.w(TAG, "BLE advertising unsupported on this device")
             return
         }
+        // start() is called again on every notifyLocalRecordChanged() (e.g. an Update
+        // tap) to broadcast the new record version — the OS tracks active advertise
+        // sessions per-callback, so calling startAdvertising again with the same
+        // `callback` while a previous session is still live fails with
+        // ADVERTISE_FAILED_ALREADY_STARTED (error=3) instead of updating the payload.
+        // Stop any existing session first so the new version actually gets broadcast.
+        if (advertiser != null) {
+            leAdvertiser.stopAdvertising(callback)
+        }
         advertiser = leAdvertiser
 
         val settings = AdvertiseSettings.Builder()
@@ -59,8 +68,14 @@ class BleAdvertiser @Inject constructor(
             .setConnectable(true)
             .build()
 
+        // Deliberately NOT advertising the full 128-bit service UUID here: Flags(3B) +
+        // a 128-bit Service UUID AD structure(18B) + this manufacturer data already
+        // exceeds legacy BLE advertising's 31-byte cap (measured: 37 bytes), which fails
+        // silently with ADVERTISE_FAILED_DATA_TOO_LARGE (error=1) on stacks that enforce
+        // it strictly. The manufacturer-ID-tagged payload is enough for scan-time
+        // filtering (see BleScanner); the real GATT service UUID is only checked after
+        // connecting, during service discovery, where there's no such size limit.
         val data = AdvertiseData.Builder()
-            .addServiceUuid(ParcelUuid(BleConstants.SERVICE_UUID))
             .addManufacturerData(BleConstants.MANUFACTURER_ID, shortIdentityPayload)
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)

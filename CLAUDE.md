@@ -17,6 +17,9 @@ created it (no Android SDK/Gradle/emulator was available there). Treat any
 "it works" claim as unverified until `./gradlew testDebugUnitTest` and an
 actual device run have been done.
 
+## Android tools
+Android related tools are present here `C:\Android\platform-tools\adb.exe`
+
 ## Project layout
 
 Single `:app` Gradle module, layered by package (not by Gradle module —

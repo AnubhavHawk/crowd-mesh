@@ -3,6 +3,7 @@ package com.crowdmesh.presentation.map
 import com.crowdmesh.domain.geohash.GeohashEncoder
 import com.crowdmesh.domain.model.DensityLevel
 import com.crowdmesh.domain.model.HeatmapCell
+import com.crowdmesh.domain.model.PresenceRecord
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -21,6 +22,9 @@ object HeatmapLayerBuilder {
 
     const val SOURCE_ID = "crowdmesh-heatmap-source"
     const val FILL_LAYER_ID = "crowdmesh-heatmap-fill"
+
+    const val OWN_LOCATION_SOURCE_ID = "crowdmesh-own-location-source"
+    const val OWN_LOCATION_LAYER_ID = "crowdmesh-own-location-circle"
 
     const val PROPERTY_LEVEL = "level"
     const val PROPERTY_COUNT = "count"
@@ -67,6 +71,41 @@ object HeatmapLayerBuilder {
                 },
             )
         }
+    }
+
+    /** A single-point `FeatureCollection` for the device's own presence record, or an empty one if there isn't one yet. */
+    fun buildOwnLocationGeoJson(record: PresenceRecord?): String {
+        val featureCollection = buildJsonObject {
+            put("type", "FeatureCollection")
+            put(
+                "features",
+                buildJsonArray {
+                    if (record != null) {
+                        val bounds = GeohashEncoder.decodeBounds(record.geohash)
+                        add(
+                            buildJsonObject {
+                                put("type", "Feature")
+                                put(
+                                    "geometry",
+                                    buildJsonObject {
+                                        put("type", "Point")
+                                        put(
+                                            "coordinates",
+                                            buildJsonArray {
+                                                add(bounds.centerLon)
+                                                add(bounds.centerLat)
+                                            },
+                                        )
+                                    },
+                                )
+                                put("properties", buildJsonObject {})
+                            },
+                        )
+                    }
+                },
+            )
+        }
+        return featureCollection.toString()
     }
 
     private fun JsonArrayBuilder.addCoordinate(lon: Double, lat: Double) {

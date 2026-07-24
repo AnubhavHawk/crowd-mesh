@@ -9,9 +9,9 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.crowdmesh.domain.model.TransportKind
+import com.crowdmesh.mesh.IdentityPayloadEncoder
 import com.crowdmesh.mesh.discovery.DiscoveredPeer
 import com.crowdmesh.util.Logger
 import com.crowdmesh.util.TimeProvider
@@ -47,6 +47,7 @@ class BleScanner @Inject constructor(
 
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
+                Logger.d(TAG, "[BLE_SCAN] discovered ${result.device.address} rssi=${result.rssi}")
                 trySend(
                     DiscoveredPeer(
                         connectionHandle = result.device.address,
@@ -63,8 +64,20 @@ class BleScanner @Inject constructor(
             }
         }
 
+        // Filters by manufacturer ID rather than the GATT service UUID: advertising both
+        // the 128-bit service UUID and this manufacturer data would exceed legacy BLE's
+        // 31-byte advertisement cap (see BleAdvertiser.start()'s comment). An all-zero
+        // mask means "match any payload bytes" — we only care that some CrowdMesh peer
+        // advertised under our manufacturer ID; the real service UUID is verified after
+        // connecting, during GATT service discovery.
         val filters = listOf(
-            ScanFilter.Builder().setServiceUuid(ParcelUuid(BleConstants.SERVICE_UUID)).build()
+            ScanFilter.Builder()
+                .setManufacturerData(
+                    BleConstants.MANUFACTURER_ID,
+                    ByteArray(IdentityPayloadEncoder.PAYLOAD_BYTES),
+                    ByteArray(IdentityPayloadEncoder.PAYLOAD_BYTES),
+                )
+                .build()
         )
         val settings = ScanSettings.Builder()
             .setScanMode(scanMode)

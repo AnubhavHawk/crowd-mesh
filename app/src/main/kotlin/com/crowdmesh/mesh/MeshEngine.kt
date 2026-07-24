@@ -100,7 +100,16 @@ class MeshEngine @Inject constructor(
         discoveryJob = applicationScope.launch {
             peerDiscoveryManager.discover(dutyCycle).collect { peer ->
                 recordSighting(peer.connectionHandle, peer.timestampMillis)
-                connectionManager.connectIfWorthwhile(peer) { connection -> trackedSync(connection) }
+                // Launched as an independent child of applicationScope, not run inline in
+                // this collect block: connectIfWorthwhile/trackedSync must survive a duty
+                // cycle change. Every notifyLocalRecordChanged() (e.g. an Update tap) calls
+                // setDutyCycle again, which cancels discoveryJob to restart discovery —
+                // when this was inline, that cancellation reached into whatever sync
+                // happened to be in-flight and killed it mid-handshake
+                // (JobCancellationException), not just the scan/discovery loop.
+                applicationScope.launch {
+                    connectionManager.connectIfWorthwhile(peer) { connection -> trackedSync(connection) }
+                }
             }
         }
     }

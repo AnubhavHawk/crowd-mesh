@@ -52,6 +52,10 @@ class BleGattServerManager @Inject constructor(
     // slightly after the peer's first write arrives.
     private val perDeviceFrameChannels = ConcurrentHashMap<String, Channel<ByteArray>>()
 
+    // Tracks which connected centrals have actually enabled notifications (written the
+    // CCCD descriptor) yet — see the comment on _deviceConnected's emission below.
+    private val notificationsEnabledDevices = ConcurrentHashMap.newKeySet<String>()
+
     /** Emits a device address whenever a central connects to us, so [com.crowdmesh.mesh.transport.BleTransport] can hand off a connection object to the sync layer. */
     private val _deviceConnected = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val deviceConnected: SharedFlow<String> = _deviceConnected.asSharedFlow()
@@ -61,18 +65,20 @@ class BleGattServerManager @Inject constructor(
 
     private val callback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            Logger.d(TAG, "[GATT_SERVER] onConnectionStateChange(${device.address}) status=$status newState=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     connectedDevices[device.address] = device
                     reassemblers[device.address] = MessageFramer.Reassembler()
                     perDeviceFrameChannels[device.address] = Channel(Channel.UNLIMITED)
-                    _deviceConnected.tryEmit(device.address)
+                    // _deviceConnected is NOT emitted here — see onDescriptorWriteRequest.
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     connectedDevices.remove(device.address)
                     reassemblers.remove(device.address)
                     perDeviceFrameChannels.remove(device.address)?.close()
                     pendingNotificationAcks.remove(device.address)?.complete(false)
+                    notificationsEnabledDevices.remove(device.address)
                 }
             }
         }
@@ -88,12 +94,17 @@ class BleGattServerManager @Inject constructor(
             value: ByteArray,
         ) {
             if (characteristic.uuid == BleConstants.INBOUND_CHARACTERISTIC_UUID) {
+                Logger.d(TAG, "[GATT_SERVER] onCharacteristicWriteRequest from ${device.address}, ${value.size} bytes")
                 val reassembler = reassemblers.getOrPut(device.address) { MessageFramer.Reassembler() }
                 val complete = runCatching { reassembler.feed(value) }
                     .onFailure { Logger.w(TAG, "malformed frame from ${device.address}", it) }
                     .getOrNull()
                 if (complete != null) {
-                    perDeviceFrameChannels[device.address]?.trySend(complete)
+                    Logger.d(TAG, "[GATT_SERVER] reassembled ${complete.size}-byte frame from ${device.address}")
+                    val sent = perDeviceFrameChannels[device.address]?.trySend(complete)
+                    if (sent == null || sent.isFailure) {
+                        Logger.w(TAG, "[GATT_SERVER] no open frame channel for ${device.address}, frame dropped")
+                    }
                 }
             }
             if (responseNeeded) {
@@ -111,12 +122,25 @@ class BleGattServerManager @Inject constructor(
             offset: Int,
             value: ByteArray,
         ) {
+            val notificationsEnabled = value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+            Logger.d(TAG, "[GATT_SERVER] onDescriptorWriteRequest from ${device.address}, notifications enabled=$notificationsEnabled")
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+            }
+            // Only now — once the central has actually subscribed to notifications — is it
+            // safe to hand this connection to SyncManager, which immediately notifies a
+            // HELLO. Emitting _deviceConnected at STATE_CONNECTED time (the old behavior)
+            // let that first notification race the central's own CCCD write; a notification
+            // sent before a central subscribes is routinely dropped by the BLE stack, which
+            // silently killed the handshake before it could even start. Guarded with
+            // notificationsEnabledDevices since some centrals redundantly re-write the CCCD.
+            if (notificationsEnabled && notificationsEnabledDevices.add(device.address)) {
+                _deviceConnected.tryEmit(device.address)
             }
         }
 
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+            Logger.d(TAG, "[GATT_SERVER] onNotificationSent to ${device.address} status=$status")
             pendingNotificationAcks.remove(device.address)?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
     }
@@ -157,6 +181,7 @@ class BleGattServerManager @Inject constructor(
         service.addCharacteristic(outbound)
         server.addService(service)
         gattServer = server
+        Logger.d(TAG, "[GATT_SERVER] started, service ${BleConstants.SERVICE_UUID} registered")
     }
 
     @SuppressLint("MissingPermission")
@@ -173,11 +198,22 @@ class BleGattServerManager @Inject constructor(
     /** Sends [message] to an already-connected central, chunked and flow-controlled via notify ACKs. */
     @SuppressLint("MissingPermission")
     suspend fun sendFrame(deviceAddress: String, message: ByteArray): Boolean {
-        val server = gattServer ?: return false
-        val device = connectedDevices[deviceAddress] ?: return false
+        val server = gattServer
+        if (server == null) {
+            Logger.w(TAG, "[GATT_SERVER] sendFrame($deviceAddress) failed: server not started")
+            return false
+        }
+        val device = connectedDevices[deviceAddress]
+        if (device == null) {
+            Logger.w(TAG, "[GATT_SERVER] sendFrame($deviceAddress) failed: not currently connected")
+            return false
+        }
         val characteristic = server.getService(BleConstants.SERVICE_UUID)
             ?.getCharacteristic(BleConstants.OUTBOUND_CHARACTERISTIC_UUID)
-            ?: return false
+        if (characteristic == null) {
+            Logger.w(TAG, "[GATT_SERVER] sendFrame($deviceAddress) failed: outbound characteristic missing")
+            return false
+        }
 
         for (chunk in MessageFramer.encodeChunks(message)) {
             val ack = CompletableDeferred<Boolean>()
@@ -186,13 +222,18 @@ class BleGattServerManager @Inject constructor(
             characteristic.value = chunk
             val started = server.notifyCharacteristicChanged(device, characteristic, false)
             if (!started) {
+                Logger.w(TAG, "[GATT_SERVER] notifyCharacteristicChanged($deviceAddress) returned false")
                 pendingNotificationAcks.remove(deviceAddress)
                 return false
             }
 
             val acked = withTimeoutOrNull(NOTIFY_TIMEOUT_MILLIS) { ack.await() } ?: false
-            if (!acked) return false
+            if (!acked) {
+                Logger.w(TAG, "[GATT_SERVER] sendFrame($deviceAddress) chunk not acked within ${NOTIFY_TIMEOUT_MILLIS}ms")
+                return false
+            }
         }
+        Logger.d(TAG, "[GATT_SERVER] sendFrame($deviceAddress) sent ${message.size} bytes successfully")
         return true
     }
 

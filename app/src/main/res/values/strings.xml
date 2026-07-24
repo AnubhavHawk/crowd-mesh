@@ -24,6 +24,11 @@
     <string name="map_title">Crowd Map</string>
     <string name="map_legend_low">Low</string>
     <string name="map_legend_high">High</string>
+    <string name="map_legend_green">Quiet (&lt; 3)</string>
+    <string name="map_legend_yellow">Light (3+)</string>
+    <string name="map_legend_orange">Busy (8+)</string>
+    <string name="map_legend_red">Crowded (20+)</string>
+    <string name="map_my_location">Your location</string>
 
     <string name="mesh_status_idle">Idle</string>
     <string name="mesh_status_scanning">Scanning</string>

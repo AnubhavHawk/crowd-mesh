@@ -30,6 +30,9 @@ class CrowdMeshApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // TEMPORARY raw diagnostic — the very first thing that can possibly run in this
+        // process, no Compose/Hilt-injection/navigation required.
+        android.util.Log.e("MAPDEBUG_RAW", "CrowdMeshApp.onCreate() entered")
         // MapLibre.getInstance() must run before any MapView is constructed anywhere
         // in the app (its constructor reads this singleton) — doing it here at
         // process start guarantees that ordering instead of racing it against

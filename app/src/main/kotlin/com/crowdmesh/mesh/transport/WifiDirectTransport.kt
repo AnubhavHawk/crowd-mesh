@@ -228,6 +228,17 @@ class WifiDirectTransport @Inject constructor(
     ) : TransportConnection {
         override val kind: TransportKind = TransportKind.WIFI_DIRECT
 
+        init {
+            // A plain blocking Socket read has no suspension point, so kotlinx.coroutines
+            // cancellation (e.g. SyncManager's withTimeoutOrNull around receiveOne) cannot
+            // interrupt it — the collecting coroutine would simply block the IO-dispatcher
+            // thread forever waiting for bytes that never arrive, and the "timeout" would
+            // never actually fire. Socket.setSoTimeout makes the blocking read itself bounded
+            // (throws SocketTimeoutException, an IOException, which incomingFrames already
+            // catches below), so this can never hang past a bounded, real socket-level limit.
+            socket.soTimeout = SOCKET_READ_TIMEOUT_MILLIS
+        }
+
         private val output = DataOutputStream(socket.getOutputStream())
         private val input = DataInputStream(socket.getInputStream())
 
@@ -236,6 +247,7 @@ class WifiDirectTransport @Inject constructor(
                 val length = try {
                     input.readInt()
                 } catch (e: IOException) {
+                    Logger.d(TAG, "[WIFI_DIRECT] incomingFrames read stopped for $remoteHandle: ${e.javaClass.simpleName}")
                     break
                 }
                 if (length !in 0..ProtocolConstants.MAX_MESSAGE_BYTES) break
@@ -243,6 +255,7 @@ class WifiDirectTransport @Inject constructor(
                 try {
                     input.readFully(payload)
                 } catch (e: IOException) {
+                    Logger.d(TAG, "[WIFI_DIRECT] incomingFrames payload read stopped for $remoteHandle: ${e.javaClass.simpleName}")
                     break
                 }
                 emit(payload)
@@ -271,5 +284,11 @@ class WifiDirectTransport @Inject constructor(
         const val CONNECT_TIMEOUT_MILLIS = 10_000
         const val CONNECTION_INFO_TIMEOUT_MILLIS = 8_000L
         const val CONNECTION_INFO_POLL_MILLIS = 400L
+
+        // Bounds every blocking socket read so a stalled/vanished peer can't hang this
+        // connection's incomingFrames forever (see WifiDirectSocketConnection's init).
+        // Comfortably above SyncManager.RECEIVE_TIMEOUT_MILLIS (10s) so the socket-level
+        // bound is never what fires first in the normal case.
+        const val SOCKET_READ_TIMEOUT_MILLIS = 15_000
     }
 }

@@ -16,7 +16,7 @@ import com.crowdmesh.mesh.protocol.ProtocolConstants
 import com.crowdmesh.mesh.transport.TransportConnection
 import com.crowdmesh.util.Logger
 import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
@@ -54,41 +54,51 @@ class SyncManager @Inject constructor(
 ) {
     suspend fun syncOverConnection(connection: TransportConnection) {
         val myDeviceId = identityProvider.getOrCreateDeviceId()
-        Logger.d(TAG, "starting sync with ${connection.remoteHandle} over ${connection.kind}")
+        val peer = connection.remoteHandle
+        Logger.d(TAG, "[SYNC] starting sync with $peer over ${connection.kind}")
 
         val helloSent = connection.send(
             PacketCodec.encodeHello(HelloDto(myDeviceId, ProtocolConstants.PROTOCOL_VERSION))
         )
-        if (!helloSent) return
-        val peerHello = receiveOne<PacketCodec.DecodedPacket.Hello>(connection) ?: run {
-            Logger.w(TAG, "no HELLO from ${connection.remoteHandle}, aborting sync")
+        Logger.d(TAG, "[SYNC:HELLO] sent to $peer, success=$helloSent")
+        if (!helloSent) {
+            Logger.w(TAG, "[SYNC:HELLO] send failed, aborting sync with $peer")
             return
         }
+        val peerHello = receiveOne<PacketCodec.DecodedPacket.Hello>(connection) ?: run {
+            Logger.w(TAG, "[SYNC:HELLO] no HELLO from $peer within ${RECEIVE_TIMEOUT_MILLIS}ms, aborting sync")
+            return
+        }
+        Logger.d(TAG, "[SYNC:HELLO] received from $peer, deviceId=${peerHello.value.deviceId} protocolVersion=${peerHello.value.protocolVersion}")
         if (peerHello.value.protocolVersion != ProtocolConstants.PROTOCOL_VERSION) {
-            Logger.w(TAG, "protocol version mismatch with ${connection.remoteHandle}, aborting sync")
+            Logger.w(TAG, "[SYNC:HELLO] protocol version mismatch with $peer (ours=${ProtocolConstants.PROTOCOL_VERSION}, theirs=${peerHello.value.protocolVersion}), aborting sync")
             return
         }
 
         val localRecords = presenceRepository.recordsForDigest(GossipPolicy.DIGEST_ENTRY_LIMIT)
         val localByUserId = localRecords.associateBy { it.userId }
+        Logger.d(TAG, "[SYNC:DIGEST] sending ${localRecords.size} local record versions to $peer")
 
         connection.send(
             PacketCodec.encodeDigest(DigestDto(localRecords.map { DigestEntryDto(it.userId, it.version) }))
         )
         val peerDigest = receiveOne<PacketCodec.DecodedPacket.Digest>(connection)?.value ?: run {
-            Logger.w(TAG, "no DIGEST from ${connection.remoteHandle}, aborting sync")
+            Logger.w(TAG, "[SYNC:DIGEST] no DIGEST from $peer within ${RECEIVE_TIMEOUT_MILLIS}ms, aborting sync")
             return
         }
+        Logger.d(TAG, "[SYNC:DIGEST] received ${peerDigest.entries.size} entries from $peer")
 
         val needFromPeer = peerDigest.entries
             .filter { entry -> entry.version > (localByUserId[entry.userId]?.version ?: -1L) }
             .map { it.userId }
+        Logger.d(TAG, "[SYNC:REQUEST] need ${needFromPeer.size} record(s) from $peer: $needFromPeer")
 
         connection.send(PacketCodec.encodeRecordRequest(RecordRequestDto(needFromPeer)))
         val peerRequest = receiveOne<PacketCodec.DecodedPacket.RecordRequest>(connection)?.value ?: run {
-            Logger.w(TAG, "no RECORD_REQUEST from ${connection.remoteHandle}, aborting sync")
+            Logger.w(TAG, "[SYNC:REQUEST] no RECORD_REQUEST from $peer within ${RECEIVE_TIMEOUT_MILLIS}ms, aborting sync")
             return
         }
+        Logger.d(TAG, "[SYNC:REQUEST] $peer is requesting ${peerRequest.userIds.size} record(s): ${peerRequest.userIds}")
 
         val outgoingBatch = peerRequest.userIds.mapNotNull { userId -> localByUserId[userId] }.map { record ->
             GossipMessage(
@@ -98,22 +108,34 @@ class SyncManager @Inject constructor(
                 hopCount = 0,
             ).toWireDto()
         }
-        connection.send(PacketCodec.encodeRecordBatch(RecordBatchDto(outgoingBatch)))
+        val batchSent = connection.send(PacketCodec.encodeRecordBatch(RecordBatchDto(outgoingBatch)))
+        Logger.d(TAG, "[SYNC:BATCH] sent ${outgoingBatch.size} record(s) to $peer, success=$batchSent")
 
         if (needFromPeer.isNotEmpty()) {
             val batch = receiveOne<PacketCodec.DecodedPacket.RecordBatch>(connection)?.value
-            batch?.records?.forEach { wire -> applyIncoming(wire.toDomain()) }
+            if (batch == null) {
+                Logger.w(TAG, "[SYNC:BATCH] no RECORD_BATCH from $peer within ${RECEIVE_TIMEOUT_MILLIS}ms even though we requested ${needFromPeer.size} record(s)")
+            } else {
+                Logger.d(TAG, "[SYNC:BATCH] received ${batch.records.size} record(s) from $peer")
+                batch.records.forEach { wire -> applyIncoming(wire.toDomain()) }
+            }
         }
 
         connection.send(PacketCodec.encodeBye())
-        Logger.d(TAG, "sync with ${connection.remoteHandle} complete: sent ${outgoingBatch.size}, requested ${needFromPeer.size}")
+        Logger.d(TAG, "[SYNC] complete with $peer: sent ${outgoingBatch.size}, requested ${needFromPeer.size}")
     }
 
     private suspend fun applyIncoming(message: GossipMessage) {
-        if (!messageStore.shouldProcess(message)) return
+        if (!messageStore.shouldProcess(message)) {
+            Logger.d(TAG, "[SYNC:APPLY] dropping ${message.messageId} (expired, over hop limit, or already seen)")
+            return
+        }
         val existing = presenceRepository.getRecord(message.record.userId)
         if (ConflictResolver.isNewer(existing, message.record)) {
             presenceRepository.mergeRemoteRecord(message.record, message.ttlExpiresAt)
+            Logger.d(TAG, "[SYNC:APPLY] merged ${message.record.userId} v${message.record.version} into local DB")
+        } else {
+            Logger.d(TAG, "[SYNC:APPLY] ${message.record.userId} v${message.record.version} not newer than local (existing=${existing?.version}), skipped")
         }
         messageStore.markProcessed(message)
     }
@@ -121,10 +143,16 @@ class SyncManager @Inject constructor(
     private suspend inline fun <reified T : PacketCodec.DecodedPacket> receiveOne(
         connection: TransportConnection,
     ): T? = withTimeoutOrNull(RECEIVE_TIMEOUT_MILLIS) {
+        // firstOrNull, not first(): the underlying connection can legitimately end
+        // (peer disconnects, socket closes) before a matching packet ever arrives.
+        // first() would throw NoSuchElementException in that case, which isn't a
+        // timeout and wasn't being caught anywhere — it was escaping syncOverConnection
+        // as an unhandled failure instead of the same graceful "aborting sync" path
+        // the timeout branch already has.
         connection.incomingFrames
             .map { PacketCodec.decode(it) }
             .filterIsInstance<T>()
-            .first()
+            .firstOrNull()
     }
 
     private companion object {

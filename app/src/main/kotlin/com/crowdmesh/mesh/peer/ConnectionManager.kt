@@ -23,17 +23,23 @@ class ConnectionManager @Inject constructor(
 
     suspend fun connectIfWorthwhile(peer: DiscoveredPeer, onConnected: suspend (TransportConnection) -> Unit) {
         peerManager.recordSighting(peer)
-        if (!peerManager.shouldSync(peer)) return
+        if (!peerManager.shouldSync(peer)) {
+            Logger.d(TAG, "[CONNECT] skipping ${peer.connectionHandle}: resync cooldown not elapsed")
+            return
+        }
 
+        Logger.d(TAG, "[CONNECT] opening connection to ${peer.connectionHandle} over ${peer.transportKind}")
         connectionSlots.withPermit {
             val connection = transportManager.openConnection(peer)
             if (connection == null) {
-                Logger.d(TAG, "could not open connection to ${peer.connectionHandle}")
+                Logger.w(TAG, "[CONNECT] could not open connection to ${peer.connectionHandle}")
                 return@withPermit
             }
+            Logger.d(TAG, "[CONNECT] connection open with ${peer.connectionHandle}, starting sync")
             try {
                 onConnected(connection)
                 peerManager.recordSynced(peer)
+                Logger.d(TAG, "[CONNECT] sync with ${peer.connectionHandle} finished, recorded as synced")
             } finally {
                 connection.close()
             }

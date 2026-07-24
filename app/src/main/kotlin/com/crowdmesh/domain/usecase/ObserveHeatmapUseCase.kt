@@ -3,6 +3,7 @@ package com.crowdmesh.domain.usecase
 import com.crowdmesh.domain.heatmap.HeatmapAggregator
 import com.crowdmesh.domain.model.HeatmapCell
 import com.crowdmesh.domain.repository.PresenceRepository
+import com.crowdmesh.util.Logger
 import com.crowdmesh.util.TimeProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -16,10 +17,16 @@ class ObserveHeatmapUseCase @Inject constructor(
 ) {
     operator fun invoke(cellPrecision: Int = HeatmapAggregator.DEFAULT_CELL_PRECISION): Flow<List<HeatmapCell>> =
         presenceRepository.observeAllRecords().map { records ->
-            heatmapAggregator.aggregate(
+            val cells = heatmapAggregator.aggregate(
                 records = records,
                 nowMillis = timeProvider.nowMillis(),
                 cellPrecision = cellPrecision,
             )
+            Logger.d(TAG, "[HEATMAP] aggregated ${records.size} record(s) into ${cells.size} cell(s)")
+            cells
         }
+
+    private companion object {
+        const val TAG = "ObserveHeatmapUseCase"
+    }
 }

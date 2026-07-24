@@ -72,18 +72,27 @@ class BleGattClientManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun connect(deviceAddress: String): Session? = suspendCancellableCoroutine { continuation ->
+    suspend fun connect(deviceAddress: String): Session? =
+        withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) { connectInternal(deviceAddress) }.also { session ->
+            if (session == null) Logger.w(TAG, "[GATT_CLIENT] connect($deviceAddress) timed out or failed after ${CONNECT_TIMEOUT_MILLIS}ms")
+        }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun connectInternal(deviceAddress: String): Session? = suspendCancellableCoroutine { continuation ->
         if (!hasConnectPermission()) {
-            Logger.w(TAG, "missing BLUETOOTH_CONNECT permission, not connecting to $deviceAddress")
+            Logger.w(TAG, "[GATT_CLIENT] missing BLUETOOTH_CONNECT permission, not connecting to $deviceAddress")
             continuation.resume(null)
             return@suspendCancellableCoroutine
         }
         val device = bluetoothManager.adapter?.getRemoteDevice(deviceAddress)
         if (device == null) {
+            Logger.w(TAG, "[GATT_CLIENT] getRemoteDevice($deviceAddress) returned null")
             continuation.resume(null)
             return@suspendCancellableCoroutine
         }
+        Logger.d(TAG, "[GATT_CLIENT] connectGatt($deviceAddress) initiating")
 
+        var pendingInboundCharacteristic: BluetoothGattCharacteristic? = null
         val reassembler = MessageFramer.Reassembler()
         // A Channel (not a SharedFlow) so frames arriving before the returned Session's
         // incomingFrames is actually collected are queued rather than dropped — there is
@@ -101,6 +110,7 @@ class BleGattClientManager @Inject constructor(
 
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                Logger.d(TAG, "[GATT_CLIENT] onConnectionStateChange($deviceAddress) status=$status newState=$newState")
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> gatt.requestMtu(BleConstants.GATT_MTU_REQUEST_BYTES)
                     BluetoothProfile.STATE_DISCONNECTED -> {
@@ -112,12 +122,13 @@ class BleGattClientManager @Inject constructor(
             }
 
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                Logger.d(TAG, "[GATT_CLIENT] onMtuChanged($deviceAddress) mtu=$mtu status=$status")
                 gatt.discoverServices()
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
-                    Logger.w(TAG, "service discovery failed, status=$status")
+                    Logger.w(TAG, "[GATT_CLIENT] service discovery failed for $deviceAddress, status=$status")
                     resumeOnce(null)
                     return
                 }
@@ -125,31 +136,56 @@ class BleGattClientManager @Inject constructor(
                 val inbound = service?.getCharacteristic(BleConstants.INBOUND_CHARACTERISTIC_UUID)
                 val outbound = service?.getCharacteristic(BleConstants.OUTBOUND_CHARACTERISTIC_UUID)
                 if (inbound == null || outbound == null) {
-                    Logger.w(TAG, "peer is missing the CrowdMesh GATT service/characteristics")
+                    Logger.w(TAG, "[GATT_CLIENT] peer $deviceAddress is missing the CrowdMesh GATT service/characteristics (service=$service)")
                     resumeOnce(null)
                     return
                 }
 
                 gatt.setCharacteristicNotification(outbound, true)
-                outbound.getDescriptor(BleConstants.CLIENT_CONFIG_DESCRIPTOR_UUID)?.let { descriptor ->
-                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(descriptor)
+                val descriptor = outbound.getDescriptor(BleConstants.CLIENT_CONFIG_DESCRIPTOR_UUID)
+                if (descriptor == null) {
+                    // Nothing to wait for — resume immediately, same as before.
+                    Logger.w(TAG, "[GATT_CLIENT] outbound characteristic missing CCCD descriptor for $deviceAddress")
+                    Logger.d(TAG, "[GATT_CLIENT] session ready for $deviceAddress")
+                    resumeOnce(Session(gatt, inbound, frameChannel.receiveAsFlow(), ackHolder))
+                    return
                 }
 
+                // Android's BLE stack only allows one outstanding GATT operation at a time
+                // per connection. Resuming here (before this descriptor write actually
+                // completes) let SyncManager's first characteristic write — the HELLO —
+                // race the still-in-flight descriptor write and get rejected outright
+                // (gatt.writeCharacteristic returning false). Only resume once
+                // onDescriptorWrite below confirms this operation is done.
+                pendingInboundCharacteristic = inbound
+                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                gatt.writeDescriptor(descriptor)
+            }
+
+            override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                Logger.d(TAG, "[GATT_CLIENT] onDescriptorWrite for $deviceAddress status=$status")
+                val inbound = pendingInboundCharacteristic ?: return
+                pendingInboundCharacteristic = null
+                Logger.d(TAG, "[GATT_CLIENT] session ready for $deviceAddress")
                 resumeOnce(Session(gatt, inbound, frameChannel.receiveAsFlow(), ackHolder))
             }
 
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
                 if (characteristic.uuid == BleConstants.OUTBOUND_CHARACTERISTIC_UUID) {
+                    Logger.d(TAG, "[GATT_CLIENT] onCharacteristicChanged from $deviceAddress, ${characteristic.value?.size ?: 0} bytes")
                     val complete = runCatching { reassembler.feed(characteristic.value) }
                         .onFailure { Logger.w(TAG, "malformed frame from $deviceAddress", it) }
                         .getOrNull()
-                    if (complete != null) frameChannel.trySend(complete)
+                    if (complete != null) {
+                        Logger.d(TAG, "[GATT_CLIENT] reassembled ${complete.size}-byte frame from $deviceAddress")
+                        frameChannel.trySend(complete)
+                    }
                 }
             }
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
                 if (characteristic.uuid == BleConstants.INBOUND_CHARACTERISTIC_UUID) {
+                    Logger.d(TAG, "[GATT_CLIENT] onCharacteristicWrite to $deviceAddress status=$status")
                     ackHolder.pending?.complete(status == BluetoothGatt.GATT_SUCCESS)
                 }
             }
@@ -157,6 +193,7 @@ class BleGattClientManager @Inject constructor(
 
         val gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
         if (gatt == null) {
+            Logger.w(TAG, "[GATT_CLIENT] connectGatt($deviceAddress) returned null")
             continuation.resume(null)
         } else {
             continuation.invokeOnCancellation { gatt.close() }
@@ -174,5 +211,6 @@ class BleGattClientManager @Inject constructor(
     private companion object {
         const val TAG = "BleGattClientManager"
         const val WRITE_TIMEOUT_MILLIS = 5_000L
+        const val CONNECT_TIMEOUT_MILLIS = 15_000L
     }
 }
