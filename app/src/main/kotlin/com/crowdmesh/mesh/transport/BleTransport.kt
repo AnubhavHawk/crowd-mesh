@@ -37,13 +37,18 @@ class BleTransport @Inject constructor(
     override val incomingConnections: SharedFlow<TransportConnection> = _incomingConnections.asSharedFlow()
 
     init {
-        gattServerManager.start()
+        // Only wires the flow collection — no Bluetooth API call here. Hilt may
+        // construct this object (and thus run this init block) before runtime
+        // permissions are granted, so anything touching the radio must wait for
+        // start() instead. See the Transport.start() doc for why.
         applicationScope.launch {
             gattServerManager.deviceConnected.collect { address ->
                 _incomingConnections.tryEmit(BleServerConnection(address, gattServerManager))
             }
         }
     }
+
+    override fun start() = gattServerManager.start()
 
     override fun isAvailable(): Boolean = advertiser.isSupported()
 

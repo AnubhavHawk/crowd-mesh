@@ -31,6 +31,11 @@ class TransportManager @Inject constructor(
 
     val incomingConnections: Flow<TransportConnection> = allTransports.map { it.incomingConnections }.merge()
 
+    /** Sets up inbound-connection handling for every transport. Only call once permissions are granted. */
+    fun startAll() {
+        availableTransports.forEach { it.start() }
+    }
+
     fun startAdvertisingAll(identityPayload: ByteArray) {
         availableTransports.forEach { it.startAdvertising(identityPayload) }
     }

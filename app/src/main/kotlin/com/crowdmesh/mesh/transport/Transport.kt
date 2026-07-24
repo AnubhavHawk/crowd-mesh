@@ -26,6 +26,15 @@ interface Transport {
 
     fun isAvailable(): Boolean
 
+    /**
+     * Sets up anything this transport needs to accept inbound connections
+     * (e.g. BLE's GATT server). Called only from [com.crowdmesh.mesh.MeshEngine.start],
+     * i.e. only after the required runtime permissions are confirmed granted —
+     * must never be invoked from a constructor/init block, since Hilt may build
+     * this object's whole dependency graph before permissions are known.
+     */
+    fun start() = Unit
+
     fun startAdvertising(identityPayload: ByteArray)
 
     fun stopAdvertising()

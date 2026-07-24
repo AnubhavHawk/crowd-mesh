@@ -72,6 +72,9 @@ class MeshEngine @Inject constructor(
     override fun start() {
         if (started) return
         started = true
+        // Permission-gated radio setup (e.g. BLE's GATT server) happens here, not at
+        // construction time — this is only reached from HomeViewModel.onPermissionsGranted().
+        transportManager.startAll()
         _status.update { it.copy(activeTransports = transportManager.availableTransports.map { t -> t.kind }.toSet()) }
         applicationScope.launch { advertiseCurrentRecord() }
         setDutyCycle(MeshDutyCycle.FOREGROUND_IDLE)

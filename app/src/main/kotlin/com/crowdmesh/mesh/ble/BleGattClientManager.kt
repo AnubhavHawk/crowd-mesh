@@ -11,6 +11,9 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.crowdmesh.util.Logger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
@@ -70,6 +73,11 @@ class BleGattClientManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     suspend fun connect(deviceAddress: String): Session? = suspendCancellableCoroutine { continuation ->
+        if (!hasConnectPermission()) {
+            Logger.w(TAG, "missing BLUETOOTH_CONNECT permission, not connecting to $deviceAddress")
+            continuation.resume(null)
+            return@suspendCancellableCoroutine
+        }
         val device = bluetoothManager.adapter?.getRemoteDevice(deviceAddress)
         if (device == null) {
             continuation.resume(null)
@@ -154,6 +162,14 @@ class BleGattClientManager @Inject constructor(
             continuation.invokeOnCancellation { gatt.close() }
         }
     }
+
+    private fun hasConnectPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
 
     private companion object {
         const val TAG = "BleGattClientManager"

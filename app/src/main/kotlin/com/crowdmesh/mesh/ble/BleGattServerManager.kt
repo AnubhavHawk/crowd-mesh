@@ -13,6 +13,9 @@ import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.crowdmesh.util.Logger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
@@ -121,6 +124,10 @@ class BleGattServerManager @Inject constructor(
     @SuppressLint("MissingPermission")
     fun start() {
         if (gattServer != null) return
+        if (!hasConnectPermission()) {
+            Logger.w(TAG, "missing BLUETOOTH_CONNECT permission, not opening GATT server")
+            return
+        }
         val server = bluetoothManager.openGattServer(context, callback)
         if (server == null) {
             Logger.w(TAG, "failed to open GATT server")
@@ -188,6 +195,14 @@ class BleGattServerManager @Inject constructor(
         }
         return true
     }
+
+    private fun hasConnectPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
 
     private companion object {
         const val TAG = "BleGattServerManager"
